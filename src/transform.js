@@ -2,9 +2,17 @@ import { transformSync, build } from 'esbuild';
 import { extname, dirname, join } from 'path';
 import { existsSync } from 'fs';
 
+// 缓存 编译的 node_modules 模块，防止多次编译
 let nodeModulesMap = new Map();
+
 const appRoot = join(__dirname, '..');
-const cache = join(appRoot, 'node_modules', '.svite/');
+const cache = join(appRoot, 'target', `.cache/`);
+
+/**
+ *
+ * @param {Object} opts 编译配置对象
+ * @returns Object .code 为编译之后的代码
+ */
 export const transformCode = opts => {
   return transformSync(opts.code, {
     loader: opts.loader || 'js',
@@ -12,9 +20,14 @@ export const transformCode = opts => {
     format: 'esm'
   });
 };
+
+/**
+ *
+ * @param {Array}} pkgs 要编译的node_modules模块集合
+ */
 const buildNodeModule = async pkgs => {
   const ep = pkgs.reduce((c, n) => {
-    c.push(join(appRoot, 'node_modules', n, 'index.js'));
+    c.push(join(appRoot, 'node_modules', n, `index.js`));
     return c;
   }, []);
   await build({
@@ -32,17 +45,31 @@ const buildNodeModule = async pkgs => {
     }
   });
 };
+
+// 转换 js、jsx代码为 esm 模块
 export const transformJSX = async opts => {
-  const ext = extname(opts.path).slice(1);
+  const ext = extname(opts.path).slice(1); // 'jsx'
   const ret = transformCode({
+    // jsx -> js
     loader: ext,
     code: opts.code
   });
+
   let { code } = ret;
+
+  // 用于保存需要编译的node_module 模块
   let needbuildModule = [];
+
+  /**
+   * 寻找文件内容字符串里面的 import
+   * 分析出本地文件、node_modules 模块
+   * import React from 'react';
+   * 下面的正则取出 from 后面的 "react", 然后通过有没有 "." 判断是引用的本地文件还是三方库
+   */
   code = code.replace(/\bimport(?!\s+type)(?:[\w*{}\n\r\t, ]+from\s*)?\s*("([^"]+)"|'([^']+)')/gm, (a, b, c) => {
     let from;
     if (c.charAt(0) === '.') {
+      // 本地文件
       from = join(dirname(opts.path), c);
       const filePath = join(opts.appRoot, from);
       if (!existsSync(filePath)) {
@@ -50,18 +77,22 @@ export const transformJSX = async opts => {
           from = `${from}.js`;
         }
       }
-      // if (['svg'].includes(extname(from).slice(1))) {
-      //   from = `${from}?import`;
-      // }
+      if (['svg'].includes(extname(from).slice(1))) {
+        from = `${from}?import`;
+      }
     } else {
-      from = `${appRoot}/.cache/index.js`;
-      if (!nodeModulesMap.has(c)) {
+      // 从 node_modules 里来的
+      from = `/target/.cache/${c}/index.js`;
+      if (!nodeModulesMap.get(c)) {
         needbuildModule.push(c);
         nodeModulesMap.set(c, true);
       }
     }
+
     return a.replace(b, `"${from}"`);
   });
+
+  // 如果有需要编译的第三方模块
   if (needbuildModule.length) {
     await buildNodeModule(needbuildModule);
   }
@@ -69,4 +100,18 @@ export const transformJSX = async opts => {
     ...ret,
     code
   };
+};
+export const transformCss = opts => {
+  return `
+    var innerStyle= function(content){
+      let style=document.createElement('style')
+      style.setAttribute('type','text/css')
+      style.innerHTML=content
+      document.head.appendChild(style)
+    }
+    const css = "${opts.code.replace(/\n/g, '')}"
+    innerStyle(css)
+    innerStyle=null
+    export default css
+  `;
 };

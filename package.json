@@ -4,7 +4,6 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "preinstall": "npx only-allow pnpm",
     "dev": "esno src/dev.command.js"
   },
   "keywords": [],
